@@ -76,24 +76,20 @@ class SelectorBIC(ModelSelector):
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        best_score = float('inf')
+        # TODO implement model selection based on BIC scores
+        best_score = float("inf")
         best_model = None
-        min_n = self.min_n_components
-        max_n = self.max_n_components
-        n_frs = self.X.shape[1]
-        logN = np.log(np.sum(self.lengths))
-
-        for n in range(min_n, max_n+1):
+        for n in range(self.min_n_components, self.max_n_components + 1):
             try:
-                hmm_model = GaussianHMM(n_components=n, n_iter=1000, random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
-                logL = hmm_model.score(self.X, self.lengths)
+                model = self.base_model(n)
+                p = (n ** 2) + 2 * len(self.X[0]) * n - 1
+                N = np.sum(self.lengths)
+                score = -2 * model.score(self.X, self.lengths) + p * np.log(N)
+                if score < best_score:
+                    best_score = score
+                    best_model = model
             except:
-                continue
-            p = (n * n) + (2 * n_frs * n) - 1
-            bic = -2 * logL + logN * p
-            if bic < best_score:
-                best_score, n_components, best_model = bic, n, hmm_model
-
+                pass
         return best_model
 
 # For SelectorDIC model selector, dictionary db_logL stores log-likelihood values for every word.
@@ -102,6 +98,7 @@ class SelectorBIC(ModelSelector):
 # so it has the form {'word1': {n1: value1, n2:value2, ...}, 'word2': {n1: value1, n2:value2, ...}, ...}
 db_logL = dict()
 stored_sequences = dict()       # It stores the corresponding sequences of feature lists for all words in db_logL
+
 
 
 class SelectorDIC(ModelSelector):
@@ -113,71 +110,33 @@ class SelectorDIC(ModelSelector):
     DIC = log(P(X(i)) - 1/(M-1)SUM(log(P(X(all but i))
     '''
 
-    # compare_set_dict() compares the stored_sequences with the current sequences of features for each word.
-    # If both sequences are equal, the log-likelihood values in db_logL are used, otherwise it is created new. 
-    def compare_set_dict(self):
-        global stored_sequences
-        for word, sequence in self.words.items():
-            try:
-                stored_word_seq = np.array(stored_sequences[word])
-                curr_word_seq = np.array(sequence)
-
-                if not np.array_equal(curr_word_seq, stored_word_seq):  
-                    raise Exception
-            except:
-                self.create_db()
-                break
-
-    def create_db(self):
-        global stored_sequences
-        global db_logL
-        db_logL.clear()
-        stored_sequences = deepcopy(self.words)
-
-        for word, Xlengths in self.hwords.items():
-            db_logL[word] = dict()
-            word_X, word_lengths = Xlengths
-            for nb_hidden in range(self.min_n_components, self.max_n_components + 1):
-                try:
-                    model = GaussianHMM(n_components=nb_hidden, n_iter=1000, random_state=self.random_state, verbose=False).fit(word_X, word_lengths)
-                    db_logL[word][nb_hidden] = model.score(word_X, word_lengths)
-                except:
-                    continue
-
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-        self.compare_set_dict()
 
-        all_words = [k  for  k in  self.words.keys()]
-        best_score = -float('inf')
+        # TODO implement model selection based on DIC scores
+        best_score = -float("inf")
         best_model = None
-        n_components = None
-
-        for nb_hidden in range(self.min_n_components, self.max_n_components + 1):
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            score_other = 0
             try:
-                logL_this_word = db_logL[self.this_word][nb_hidden]
+                model = self.base_model(n)
+                score = model.score(self.X, self.lengths)
+                other_words_copy = self.words.copy()
+                del other_words_copy[self.this_word]
+                for word in other_words_copy:
+                    otherX, otherlength = self.hwords[word]
+                    try:
+                        score_other = score_other + model.score(otherX, otherlength)
+                    except:
+                        pass
+                score_other = score_other / len(other_words_copy)
+                DIC_score = score - score_other
+                if DIC_score > best_score:
+                    best_score = DIC_score
+                    best_model = model
             except:
-                continue
-
-            logL_rest_words = 0.0
-            count = 0
-            for word in all_words:
-                if word == self.this_word:
-                    continue
-                try:    
-                    logL_rest_words += db_logL[word][nb_hidden]
-                    count += 1
-                except:
-                    continue
-            dic_score = logL_this_word - logL_rest_words / count
-
-            if dic_score > best_score:
-                best_score = dic_score
-                n_components = nb_hidden
-        if n_components != None:
-            return self.base_model(n_components)
-        else:
-            return None
+                pass
+        return best_model
 
 
 class SelectorCV(ModelSelector):
@@ -187,46 +146,31 @@ class SelectorCV(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # Split into 3 folds when number of sequences for a word is atleast three
-        # Make separate list of train and test folds in train_folds and test_folds
-        n_splits = min(3, len(self.sequences))
-        if n_splits > 1:
-            split_method = KFold(n_splits)
-            train_folds = list()
-            test_folds = list()
-            for cv_train, cv_test in split_method.split(self.sequences):
-                train_folds.append(cv_train)
-                test_folds.append(cv_test)
-
-        best_score = -float('inf')
+        # TODO implement model selection using CV
+        best_score = -float("inf")
+        best_num_state = 1
         best_model = None
-        n_components = None
 
         for n in range(self.min_n_components, self.max_n_components + 1):
-            model = GaussianHMM(n_components=n, n_iter=1000, random_state=self.random_state, verbose=False)
-            mean_logL = 0.0
-
-            if n_splits == 1:
-                try:
-                    fit_model = model.fit(self.X, self.lengths)
-                    mean_logL = fit_model.score(self.X, self.lengths)
-                except:
-                    continue
-            else:
-                count = 0
-                for ii in range(len(train_folds)):
-                    train_X, train_lengths = combine_sequences(train_folds[ii], self.sequences)
-                    test_X, test_lengths = combine_sequences(test_folds[ii], self.sequences)
-                    try:
-                        fit_model = model.fit(train_X, train_lengths)
-                        mean_logL += fit_model.score(test_X, test_lengths)
-                        count += 1
-                    except:
-                        continue
-                if count > 0:
-                    mean_logL /= count
-
-            if mean_logL > best_score:
-                best_score, n_components, best_model = mean_logL, n, fit_model
-            
+            i = 0
+            total_score = 0
+            word_sequences = self.sequences
+            try:
+                split_method = KFold(n_splits=min(3, len(word_sequences)))
+            except:
+                return None
+            try:
+                for cv_train_idx, cv_test_idx in split_method.split(word_sequences):
+                    cv_train_x, cv_train_length = combine_sequences(cv_train_idx, word_sequences)
+                    cv_test_x, cv_test_length = combine_sequences(cv_test_idx, word_sequences)
+                    model = GaussianHMM(n_components=n, covariance_type="diag", n_iter=1000,
+                                        random_state=self.random_state, verbose=False).fit(cv_train_x, cv_train_length)
+                    total_score = total_score + model.score(cv_test_x, cv_test_length)
+                    i += 1
+                if total_score / i > best_score:
+                    best_score = total_score / i
+                    best_num_state = n
+            except:
+                pass
+        best_model = self.base_model(best_num_state)
         return best_model
